@@ -1,0 +1,36 @@
+stages:
+  - test
+  - build
+  - sign
+
+include:
+  - project: caas/cicd_templates
+    file: test.yml
+
+variables:
+  PACKAGE_CHART_PATH: chart
+
+release-chart:
+  stage: build
+  image: mtr.devops.telekom.de/caas/caas-tools:latest
+  before_script:
+    - mkdir -p ~/.config/helm/registry
+    - cp $MTR_OCI_AUTH ~/.config/helm/registry/config.json
+  after_script:
+    - cd ${PACKAGE_CHART_PATH}
+    - |
+      if [ -z "$CHART_VERSION" ]; then
+        CHART_VERSION=$(helm inspect chart . | egrep ^version | awk '{print $2}')
+      fi
+      CHART_NAME=$(helm inspect chart . | egrep ^name | awk '{print $2}')
+    - helm package --version $CHART_VERSION .
+    - helm push ${CHART_NAME}-${CHART_VERSION}.tgz oci://mtr.devops.telekom.de/caas/charts
+
+sign-chart:
+  image: mtr.devops.telekom.de/caas/cosign:v2.2.0
+  stage: sign
+  script:
+    - mkdir -p "${HOME}/.docker"
+    - cp ${MTR_SIGN_AUTH} ${HOME}/.docker/config.json
+    - cosign sign --tlog-upload=false --key ${COSIGN_KEY} mtr.devops.telekom.de/caas/charts/${CHART_NAME}:${CHART_VERSION}
+    - if test "${CI_COMMIT_TAG}" != ""; then cosign sign --tlog-upload=false --key ${COSIGN_KEY} mtr.devops.telekom.de/caas/charts/${CHART_NAME}:${CI_COMMIT_TAG}; fi
